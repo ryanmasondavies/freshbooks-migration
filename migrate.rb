@@ -3,41 +3,41 @@
 # It's in the format:
 # Date, Client, Project, Project Code, Task, Notes, Hours, Hours Rounded, Billable?, Invoiced?, First Name, Last Name, Department, Employee?, Hourly Rate, Billable Amount, Currency
 
+require 'yaml'
 require 'csv'
 require 'freshbooks'
 
-class Task < FreshBooks::Task
-    def to_xml(elem_name = nil)
-        # The root element is the class name underscored
-        elem_name ||= self.class.to_s.split('::').last.underscore
-        root = REXML::Element.new(elem_name)
+config = YAML::load_file(File.join(__dir__, 'config.yml'))
+freshbooks_subdomain = config['freshbooks_subdomain']
+freshbooks_auth_token = config['freshbooks_auth_token']
 
-        # only add rate and id to root elem
-        element = FreshBooks::XmlSerializer.to_node('rate', self.rate, 'fixnum')
-        root.add_element(element) if element != nil
+FreshBooks::Base.establish_connection(freshbooks_subdomain, freshbooks_auth_token)
 
-        # add id
-        element = FreshBooks::XmlSerializer.to_node('task_id', self.task_id, 'fixnum')
-        root.add_element(element) if element != nil
+class FreshBooks::Task
+  def to_xml(elem_name = nil)
+    # The root element is the class name underscored
+    elem_name ||= self.class.to_s.split('::').last.underscore
+    root = REXML::Element.new(elem_name)
 
-        root.to_s
-    end
+    # Only add rate and id to root element
+    element = FreshBooks::XmlSerializer.to_node('rate', self.rate, 'fixnum')
+    root.add_element(element) if element != nil
+
+    # Add ID
+    element = FreshBooks::XmlSerializer.to_node('task_id', self.task_id, 'fixnum')
+    root.add_element(element) if element != nil
+
+    root.to_s
+  end
 end
-
-FreshBooks::Base.establish_connection('iotize.freshbooks.com', '66b0fd5efc9d520099bcefd9e7cdd48d')
 
 $clients = FreshBooks::Client.list
 $projects = FreshBooks::Project.list
-$tasks = Task.list
+$tasks = FreshBooks::Task.list
 $me_id = FreshBooks::Staff.list[0].staff_id
 
 def client_for_name(name)
     match = nil
-
-    if name == "Alcorn McBride Inc."
-        # remove 'inc'
-        name = "Alcorn McBride"
-    end
 
     $clients.each do |client|
         if client.organization == name
@@ -83,40 +83,42 @@ def project_for_name(name, rate, client_id)
 end
 
 def task_for_name(name, billable)
-    match = nil
+  match = nil
 
-    $tasks.each do |task|
-        if task.name == name
-            match = task
-            break
-        end
+  $tasks.each do |task|
+    if task.name == name
+      match = task
+      break
     end
+  end
 
-    if match == nil
-        # task doesn't exist, so create it
-        task = Task.new
-        task.name = name
-        task.billable = billable
+  if match == nil
+    puts "Can't find task with name #{task.name}"
 
-        puts "Create task #{name}"
-        if task.create
-            # update cached tasks list
-            $tasks = FreshBooks::Task.list
+    # task doesn't exist, so create it
+    task = FreshBooks::Task.new
+    task.name = name
+    task.billable = billable
 
-            # return new project
-            return task_for_name(name, billable)
-        else
-            puts "Failed to create task: #{task.error_msg}"
-        end
+    puts "Create task #{name}"
+    if task.create
+      # update cached tasks list
+      $tasks = FreshBooks::Task.list
+
+      # return new project
+      return task_for_name(name, billable)
+    else
+      puts "Failed to create task: #{task.error_msg}"
     end
+  end
 
-    return match
+  return match
 end
 
 def import
     puts "My Staff ID: #{$me_id}"
 
-    CSV.foreach("data.csv") do |row|
+    CSV.foreach(File.join(__dir__, "data.csv"), :encoding => "utf-8") do |row|
         date = Date.strptime(row[0], "%d/%m/%Y")
         client_name = row[1]
         project_name = row[2]
@@ -146,30 +148,37 @@ def import
             # SO INSTEAD THEY ARE ADDED MANUALLY
             # AFTER THE PROJECT IS CREATED
 
-#            # make sure the project has this task assigned
-#            has_task = false
-#            if project.tasks != nil
-#                project.tasks.each do |task|
-#                    if task.name == task_name
-#                        has_task = true
-#                        break
-#                    end
-#                end
-#            end
-#
-#            # if the task is not assigned, assign it
-#            if has_task == false
-#                project.tasks.push(task)
-#                project.update
-#            end
+           # make sure the project has this task assigned
+           has_task = false
+           if project.tasks != nil
+               project.tasks.each do |task|
+                   if task.name == task_name
+                       has_task = true
+                       break
+                   end
+               end
+           end
 
-            project.tasks.push(task)
-            if project.update
-                puts "Added task #{task.name} to project #{project.name}"
-            else
-                puts "Failed to add task #{task.name} to project #{project.name} because: #{project.error_msg}"
-                return
-            end
+           # if the task is not assigned, assign it
+           if has_task == false
+               project.tasks.push(task)
+               if project.update
+                   puts "Added task #{task.name} to project #{project.name}"
+               else
+                   puts "Failed to add task #{task.name} to project #{project.name} because: #{project.error_msg}"
+                   puts "Attempted XML: #{project.to_xml}"
+                   return
+               end
+           end
+
+            # project.tasks.push(task)
+            # if project.update
+            #     puts "Added task #{task.name} to project #{project.name}"
+            # else
+            #     puts "Failed to add task #{task.name} to project #{project.name} because: #{project.error_msg}"
+            #     puts "Attempted XML: #{project.to_xml}"
+            #     return
+            # end
 
             # last thing is to create a time entry
             entry = FreshBooks::TimeEntry.new
@@ -184,6 +193,7 @@ def import
                 puts "Created entry for #{client_name} – #{project_name} – #{task_name}: #{hours} on #{date}"
             else
                 puts "FAILED to create entry for #{client_name} – #{project_name} – #{task_name}: #{hours} on #{date} BECAUSE: #{entry.error_msg}"
+                return
             end
         else
             puts "Client '#{client_name}' not found, not importing."
