@@ -93,7 +93,7 @@ def task_for_name(name, billable)
   end
 
   if match == nil
-    puts "Can't find task with name #{task.name}"
+    puts "Can't find task with name #{name}"
 
     # task doesn't exist, so create it
     task = FreshBooks::Task.new
