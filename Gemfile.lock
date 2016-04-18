@@ -21,6 +21,3 @@ PLATFORMS
 
 DEPENDENCIES
   freshbooks.rb
-
-BUNDLED WITH
-   1.10.6
